@@ -1,0 +1,1 @@
+pip install transformers huggingface_hub diffusers accelerate gguf bitsandbytes torchinfo

@@ -1,0 +1,160 @@
+from fastapi import FastAPI
+import uvicorn
+from contextlib import asynccontextmanager
+from dreamsculpt_be.models.generation_request_schema import GenerationRequest
+from dreamsculpt_be.inference_core.scheduler import scheduler_loop
+import asyncio
+from multiprocessing import Pipe, Process
+from multiprocessing.connection import Connection
+from typing import Dict
+import uuid
+
+request_tracker: Dict[str, asyncio.Future] = {}
+
+
+# --- Listen and process completed requests from the scheduler process ---
+async def result_listener(result_pipe: Connection):
+    loop = asyncio.get_running_loop()
+    while True:
+        # Run in seperate thread since pipe.recv() is blocking
+        request_id, generated_image = await loop.run_in_executor(None, result_pipe.recv)
+        # Resolve the future and remove from tracker
+        future = request_tracker.pop(request_id, None)
+        if future is not None and not future.done():
+            future.set_result(generated_image)
+
+
+# --- Startup tasks: Start scheduler and listener ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize scheduler and setup IPC
+    app.state.parent_connection, app.state.child_connection = Pipe()
+    scheduler_process = Process(target=scheduler_loop, args=[app.state.child_connection])
+    scheduler_process.start()
+    asyncio.create_task(result_listener(app.state.parent_connection))
+    yield
+    print("Shutting Down...")
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+# --- Endpoints ---
+@app.get("/health")
+def health_check():
+    return "System is healthy!"
+
+
+@app.post("/generate")
+async def generate(request: GenerationRequest) -> str:
+    # Generate request ID + Future, add to req tracker
+    request_id = str(uuid.uuid4())
+    request_future = asyncio.get_running_loop().create_future()
+    request_tracker[request_id] = request_future
+
+    # Dispatch request to scheduler
+    app.state.parent_connection.send((request_id, request.image_prompt))
+    print("request added to queue")
+
+    # Return the generated image
+    generated_image: str = await request_future
+    print("result generated")
+    return generated_image
+
+
+# --- Server Start ---
+def main():
+    uvicorn.run("dreamsculpt_be.main:app", host="0.0.0.0")
+
+
+if __name__ == "__main__":
+    main()
+
+"""
+09/05/2025
+
+Decided to host Flux Schnell in EC2 due to gemini rate limits
+Preliminary stack: FastAPI + huggingface for inference server
+    - Refer to fast-flux to optimize inference
+Using UV for project management
+    - Discovered that specifying a build backend causes uv to enforce stricter folder structure (src/package_name/)
+    - Discovered that I cant specify custom pyproject.toml cli commands unless the package installed globally
+        - wanted to have "uv run lint" trigger a ruff linter check
+
+09/12/2025
+
+Set up folder structure
+    - src/dreamsculpt_be contains the source code
+        - UV requires src/ because I specified a build backend in pyproject.toml, meaning this repo can be packaged and distributed
+Setup uv run start command
+    - the pyproject.toml section is called [project.scripts] and the kv pair is "<command>": "dreamsculpt_be.main:main"
+        - the . is because dreamsculpt_be is a python module. 
+    - main() starts the server
+Catching up on how diffusion models work, dont wanna implement something I dont understand. Will start with a script for single image gen
+    - Diffusion:
+        - Noising: Iteratively add noise to an input image, noise follows Guassian distribution
+        - De-noising: Given an noised image for a given timestep, the model predicts the noise added at that timestep.
+    - Flux:
+        - De-noising: Predict a vector space position diff (delta_x(t), AKA v(t) ) during each generation step.
+
+09/15/2025
+Scaffolded /generate endpoint: Am able to return a base64 encoded dummy PIL image. I also setup base inference script. Next step is to containerize, and deploy
+
+09/17/2025
+Chose a pytorch image from dockerhub, and setup my dockerfile. Need to get container build to work properly locally
+
+09/19/2025
+
+Container builds locally. Verfied E2E flow with DrawThings server. Need to fix preview contraction bug where offset does not persist
+
+10/02/2025
+    Working to get single image gen working on ec2. Tried with g5g.xlarge but ran out of system memory. Trying again with g5.xlarge
+
+    
+12/24/2025
+    Finished optimizing AI inference configs in my test script and started working on server code. Endpoints are setup, schema is defined,
+    and concurrency model is mostly fleshed out. Server will queue up requests, the scheduler will dequeue, batch, and trigger inference.
+    The queue contains a tuple of a Future and the input image. The scheduler resolves the future when generation is complete, and
+    FastAPI will return the result immediately since the future is awaited.
+
+    I have a problem. Incoming requests wont get queued up until the current image generation is complete. I need to have a seperate process
+    to avoid blocking the main event loop. But this opens up an IPC problem! I'd need to open 2 queues between the main and secondary processes:
+        1 for each direction of communication. 
+
+    Okay, I redid the concurrency model. Used a Pipe to communicate with the child scheduler process. Implemented batching and a global request tracker.
+
+12/26/2025
+    Lowkey annoyed, docker keeps downloading torch even though its already provided by the base image. UV doesnt allow me to install deps from a lockfile outside of a virtualenv. I woudl have to export to a requirements.txt first, dont want to do that workaround. 
+    Tried setting the project env to the system environment but its till redundently downloading torch, thus dramatically increasing build time.
+
+12/28/2025
+    Alright, I caved and created a requirements.txt so that I can install deps using uv's "pip" interface, which allows you to install in the system env. Its still downloading torch ugh. 
+    Lets just get the container working and deployed, I'll optimize the container later. 
+
+    Wait what? I was getting an OOM error during app startup, turns out colima was consuming 80GB of disk space. I totally wiped and restarted colima, and now my previous issue is 
+    no longer occuring! Its not re-downloading torch anymore!!! Not sure why or how this fixed it. OH WAIT, ITS BC I SWITCHED TO AN IMAGE THAT USES THE SAME PYTORCH VERSION AS IN MY LOCKFILE! I think
+    uv noticed that the torch version in the lockfile differed from that in the base image, which triggered the re-download!
+
+    LFG! I am able to start the container locally and hit the /generate and /health endpoints!
+    Deployment:
+        1) Convert image into a tar
+            - docker save -o dreamsculpt-0.0.3.tar 0.0.3-dreamsculpt:latest 
+        2) scp to ec2 instance:
+            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.3.tar ec2-user@52.90.244.114:/home/ec2-user
+            - ~13GB image, this takes like 10 minutes :((
+        3) ssh into instance and load image:
+            - docker load -i dreamsculpt-0.0.3.tar
+        4) Start container:
+            - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 <image_id>
+
+    Shit, i can't reach my endpoint in aws on port 8000. Fix security group to allow inbound traffic on 8000. port 80 works though!!
+    Okay, now lets connect the server to the AI inference pipeline and redeploy
+
+12/30/2025
+    Alright the GPU isnt visible to the container processes causing model init to fail
+
+
+TODO: 
+    - Error handling?
+    - Invalidation logic
+"""
