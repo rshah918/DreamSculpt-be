@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from dreamsculpt_be.models.generation_request_schema import GenerationRequest
 from dreamsculpt_be.inference_core.scheduler import scheduler_loop
 import asyncio
-from multiprocessing import Pipe, Process
+from multiprocessing import Pipe, Process, set_start_method
 from multiprocessing.connection import Connection
 from typing import Dict
 import uuid
@@ -64,6 +64,7 @@ async def generate(request: GenerationRequest) -> str:
 
 # --- Server Start ---
 def main():
+    set_start_method("spawn", force=True)
     uvicorn.run("dreamsculpt_be.main:app", host="0.0.0.0")
 
 
@@ -145,13 +146,16 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
         3) ssh into instance and load image:
             - docker load -i dreamsculpt-0.0.3.tar
         4) Start container:
-            - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 <image_id>
+            - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 --gpus all <image_id>
 
-    Shit, i can't reach my endpoint in aws on port 8000. Fix security group to allow inbound traffic on 8000. port 80 works though!!
     Okay, now lets connect the server to the AI inference pipeline and redeploy
 
 12/30/2025
-    Alright the GPU isnt visible to the container processes causing model init to fail
+    Alright model init is failing, i think because the gpu isnt visible to the container?
+
+1/1/2026
+    Added some missing runtime dependencies (protobuf, sentencepeice) to resolve model init failure, and enabled gpu passthrough on the container.
+
 
 
 TODO: 

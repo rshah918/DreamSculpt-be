@@ -2,7 +2,7 @@ from multiprocessing.connection import Connection
 from dreamsculpt_be.inference_core.generate import generate
 from dreamsculpt_be.config import max_batch_size
 from dreamsculpt_be.config import model_path
-from dreamsculpt_be.utils.utils import base64_encode_image
+from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
 from PIL.Image import Image
 from typing import List
 from queue import Queue
@@ -81,9 +81,9 @@ def scheduler_loop(child_conn: Connection) -> str:
             # Parse request batch
             request_batch: List[str] = [request_queue.get() for i in range(batch_size)]
             request_ids: List[str] = [request[0] for request in request_batch]
-            image_prompts: List[str] = [request[1] for request in request_batch]
+            image_prompts: List[str] = [base64_decode_image(request[1]) for request in request_batch]
             # Generate
-            generated_pil_images: List[Image] = generate(pipeline, image_prompt=image_prompts)
+            generated_pil_images: List[Image] = generate(pipeline, batch=image_prompts)
             # Send generated images back to parent process
             generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
             for result in zip(request_ids, generated_images):

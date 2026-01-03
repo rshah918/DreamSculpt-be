@@ -6,9 +6,9 @@ import torch
 from diffusers import FluxKontextPipeline
 
 
-def mock_generate(image_prompt: List[str], text_prompt: str | None = None) -> List[Image.Image]:
+def mock_generate(batch: List[Image.Image], input_height_width=200, output_height_width=512) -> List[Image.Image]:
     sleep(2)
-    return [Image.new(mode="RGB", size=(512, 512)) for i in range(len(image_prompt))]
+    return batch
 
 
 def generate(
@@ -33,7 +33,7 @@ def generate(
         height=output_height_width,
         width=output_height_width,
         generator=torch.Generator("cuda").manual_seed(42),
-    )
+    ).images
 
     generation_end = time()
     print(f"Image generated in {generation_end - generation_start} seconds")
