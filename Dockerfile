@@ -4,6 +4,9 @@ FROM pytorch/pytorch:2.9.1-cuda12.8-cudnn9-runtime
 RUN apt update
 RUN apt-get install -y curl
 
+# Torch Inductor requires a C compiler
+RUN apt-get update && apt-get install -y build-essential
+
 # Install UV
 ADD https://astral.sh/uv/install.sh /uv-installer.sh
 RUN sh /uv-installer.sh && rm /uv-installer.sh

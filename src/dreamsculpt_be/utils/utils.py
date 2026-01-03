@@ -16,4 +16,4 @@ def base64_decode_image(b64_encoded_image: str) -> Image.Image:
 
     image_bytes = base64.b64decode(b64_encoded_image)
     image = Image.open(BytesIO(image_bytes))
-    return image.convert("RGBA")
+    return image.convert("RGB")

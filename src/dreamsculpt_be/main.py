@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     scheduler_process.start()
     asyncio.create_task(result_listener(app.state.parent_connection))
     yield
-    print("Shutting Down...")
+    print("Shutting Down...", flush=True)
 
 
 app = FastAPI(lifespan=lifespan)
@@ -54,11 +54,11 @@ async def generate(request: GenerationRequest) -> str:
 
     # Dispatch request to scheduler
     app.state.parent_connection.send((request_id, request.image_prompt))
-    print("request added to queue")
+    print("request added to queue", flush=True)
 
     # Return the generated image
     generated_image: str = await request_future
-    print("result generated")
+    print("result generated", flush=True)
     return generated_image
 
 
@@ -139,12 +139,12 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     LFG! I am able to start the container locally and hit the /generate and /health endpoints!
     Deployment:
         1) Convert image into a tar
-            - docker save -o dreamsculpt-0.0.3.tar 0.0.3-dreamsculpt:latest 
+            - docker save -o dreamsculpt-0.0.4.tar 0.0.4-dreamsculpt:latest 
         2) scp to ec2 instance:
-            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.3.tar ec2-user@52.90.244.114:/home/ec2-user
+            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.4.tar ec2-user@52.90.244.114:/home/ec2-user
             - ~13GB image, this takes like 10 minutes :((
         3) ssh into instance and load image:
-            - docker load -i dreamsculpt-0.0.3.tar
+            - docker load -i dreamsculpt-0.0.4.tar
         4) Start container:
             - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 --gpus all <image_id>
 
@@ -156,9 +156,15 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
 1/1/2026
     Added some missing runtime dependencies (protobuf, sentencepeice) to resolve model init failure, and enabled gpu passthrough on the container.
 
+1/2/2025
+    Great news, the server works! Bad news, server deadlocks on burst load. Turns out pipes have a 64kB limit, which means I cant have more that 2-3 images queued up.
+    Split scheduler into 2 threads: one to constantly drain the pipe into the Queue and one to drain the queue + trigger AI inference
+    My current single threaded scheduler has another critial flaw, where AI inference cannot trigger until the pipe is fully drained. 
+
+    - Fixed a frontend bug where the generated image preview wont render
+            - Quotes around the base64 image string broke rendering
+    - Fixed image preview dragging bug
+    - Decoupled IPC listener from main scheduler thread to avoid blocking dispatch. 
 
 
-TODO: 
-    - Error handling?
-    - Invalidation logic
 """

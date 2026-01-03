@@ -4,7 +4,7 @@ from dreamsculpt_be.config import max_batch_size
 from dreamsculpt_be.config import model_path
 from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
 from PIL.Image import Image
-from typing import List
+from typing import List, Tuple
 from queue import Queue
 import torch
 from time import time
@@ -15,6 +15,7 @@ from diffusers import (
     AutoencoderKL,
 )
 from transformers import BitsAndBytesConfig, T5EncoderModel
+from threading import Thread
 
 
 def load_model() -> FluxKontextPipeline:
@@ -64,24 +65,29 @@ def load_model() -> FluxKontextPipeline:
     return pipeline
 
 
+def ipc_receiver(child_conn: Connection, request_queue: Queue):
+    # Listen to the IPC pipe and queue up incoming requests. This is done in a seperate thread to avoid blocking dispatch
+    while True:
+        while child_conn.poll():
+            request = child_conn.recv()
+            request_queue.put(request)
+
+
 def scheduler_loop(child_conn: Connection) -> str:
     # load model
     pipeline = load_model()
     request_queue = Queue()
+    Thread(target=ipc_receiver, args=[child_conn, request_queue], daemon=True).start()
     while True:
-        # Queue incoming requests, we need real time request count for batching
-        while child_conn.poll():
-            request = child_conn.recv()
-            request_queue.put(request)
         if not request_queue.empty():
             # Calculate batch size
             batch_size: int = 1
             if request_queue.qsize() > 1:
                 batch_size = min(request_queue.qsize(), max_batch_size)
             # Parse request batch
-            request_batch: List[str] = [request_queue.get() for i in range(batch_size)]
+            request_batch: List[Tuple[str, str]] = [request_queue.get() for i in range(batch_size)]
             request_ids: List[str] = [request[0] for request in request_batch]
-            image_prompts: List[str] = [base64_decode_image(request[1]) for request in request_batch]
+            image_prompts: List[Image] = [base64_decode_image(request[1]) for request in request_batch]
             # Generate
             generated_pil_images: List[Image] = generate(pipeline, batch=image_prompts)
             # Send generated images back to parent process
