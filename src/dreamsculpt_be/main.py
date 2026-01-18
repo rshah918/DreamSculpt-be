@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 import uvicorn
 from contextlib import asynccontextmanager
 from dreamsculpt_be.models.generation_request_schema import GenerationRequest
@@ -46,14 +46,14 @@ def health_check():
 
 
 @app.post("/generate")
-async def generate(request: GenerationRequest) -> str:
+async def generate(request: GenerationRequest, session_id: uuid.UUID = Header()) -> str:
     # Generate request ID + Future, add to req tracker
     request_id = str(uuid.uuid4())
     request_future = asyncio.get_running_loop().create_future()
     request_tracker[request_id] = request_future
 
     # Dispatch request to scheduler
-    app.state.parent_connection.send((request_id, request.image_prompt, request.text_prompt))
+    app.state.parent_connection.send((session_id, request_id, request.image_prompt, request.text_prompt))
     print("request added to queue", flush=True)
 
     # Return the generated image
@@ -139,12 +139,12 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     LFG! I am able to start the container locally and hit the /generate and /health endpoints!
     Deployment:
         1) Convert image into a tar
-            - docker save -o dreamsculpt-0.0.4.tar 0.0.4-dreamsculpt:latest 
+            - docker save -o dreamsculpt-0.0.5.tar 0.0.4-dreamsculpt:latest 
         2) scp to ec2 instance:
-            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.4.tar ec2-user@54.161.122.247:/home/ec2-user
+            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.5.tar ec2-user@54.161.122.247:/home/ec2-user
             - ~13GB image, this takes like 10 minutes :((
         3) ssh into instance and load image:
-            - docker load -i dreamsculpt-0.0.4.tar
+            - docker load -i dreamsculpt-0.0.5.tar
         4) Start container:
             - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 --gpus all <image_id>
 
@@ -167,12 +167,16 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     - Decoupled IPC listener from main scheduler thread to avoid blocking dispatch. 
 
 1/4/2025
-
     App works end to end. Generation takes 8.7 seconds, additional optimizations will get it down to 7.5. I notice that generation quality isnt the best - stick figures dont get rendered into acual people. Need to tune prompt
-To Do:
+
+1/18/2026
+    Added session de-duping in the queue. Now, a max of 1 request per session will be in the queue at any given time. Added a mandatory sessionId header as well
+    
+    To Do:
     - Tag requests with sessionID
     - Stale request handling: Queue should only contain 1 request for each active session
     - Tune prompt
     - Update inference configs to lower generation time
     - Clean up frontend code
+
 """

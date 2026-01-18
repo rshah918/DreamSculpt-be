@@ -1,5 +1,5 @@
 from multiprocessing.connection import Connection
-from dreamsculpt_be.inference_core.generate import generate
+from dreamsculpt_be.inference_core.generate import mock_generate
 from dreamsculpt_be.config import max_batch_size
 from dreamsculpt_be.config import model_path
 from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
@@ -65,32 +65,44 @@ def load_model() -> FluxKontextPipeline:
     return pipeline
 
 
-def ipc_receiver(child_conn: Connection, request_queue: Queue):
+def ipc_receiver(child_conn: Connection, session_queue: Queue, request_map: dict[str: Tuple[str, str, str]]):
     # Listen to the IPC pipe and queue up incoming requests. This is done in a seperate thread to avoid blocking dispatch
     while True:
         while child_conn.poll():
-            request = child_conn.recv()
-            request_queue.put(request)
+            request: Tuple[str, str, str, str] = child_conn.recv()
+            session_id: str = str(request[0])
+            if session_id not in request_map.keys():
+                request_map[session_id] = request[1:]
+                session_queue.put(session_id)
+            else:
+                request_map[session_id] = request[1:]
 
 
 def scheduler_loop(child_conn: Connection) -> str:
     # load model
-    pipeline = load_model()
-    request_queue = Queue()
-    Thread(target=ipc_receiver, args=[child_conn, request_queue], daemon=True).start()
+    # pipeline = load_model()
+    request_map: dict[str: Tuple[str, str, str]] = {}
+    session_queue = Queue()
+    Thread(target=ipc_receiver, args=[child_conn, session_queue, request_map], daemon=True).start()
     while True:
-        if not request_queue.empty():
+        if not session_queue.empty():
             # Calculate batch size
             batch_size: int = 1
-            if request_queue.qsize() > 1:
-                batch_size = min(request_queue.qsize(), max_batch_size)
+            if session_queue.qsize() > 1:
+                batch_size = min(session_queue.qsize(), max_batch_size)
             # Parse request batch
-            request_batch: List[Tuple[str, str, str]] = [request_queue.get() for i in range(batch_size)]
+            session_batch: List[Tuple[str, str, str]] = [str(session_queue.get()) for _ in range(batch_size)]
+            request_batch = [request_map[session_id] for session_id in session_batch]
+            # Clean up request tracker
+            for session_id, request_id in zip(session_batch, request_batch):
+                if request_map[session_id] == request_id:
+                    del request_map[session_id]
+
             request_ids: List[str] = [request[0] for request in request_batch]
             image_prompts: List[Image] = [base64_decode_image(request[1]) for request in request_batch]
             text_prompts: List[str] = [request[2] for request in request_batch]
             # Generate
-            generated_pil_images: List[Image] = generate(pipeline, text_prompts, batch=image_prompts)
+            generated_pil_images: List[Image] = mock_generate(text_prompts, batch=image_prompts)
             # Send generated images back to parent process
             generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
             for result in zip(request_ids, generated_images):
