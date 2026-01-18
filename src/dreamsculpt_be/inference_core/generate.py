@@ -1,18 +1,23 @@
 from PIL import Image
 from typing import List
 from time import sleep, time
-from dreamsculpt_be.config import model_prompt
 import torch
 from diffusers import FluxKontextPipeline
 
 
-def mock_generate(batch: List[Image.Image], input_height_width=200, output_height_width=512) -> List[Image.Image]:
+def mock_generate(
+    text_prompts, batch: List[Image.Image], input_height_width=200, output_height_width=512
+) -> List[Image.Image]:
     sleep(2)
     return batch
 
 
 def generate(
-    pipeline: FluxKontextPipeline, batch: List[Image.Image], input_height_width=200, output_height_width=512
+    pipeline: FluxKontextPipeline,
+    text_prompts,
+    batch: List[Image.Image],
+    input_height_width=200,
+    output_height_width=512,
 ) -> List[Image.Image]:
     batch = [
         image.resize(
@@ -24,7 +29,7 @@ def generate(
 
     generation_start = time()
     images = pipeline(
-        prompt=[model_prompt] * len(batch),
+        prompt=text_prompts,
         max_area=output_height_width**2,
         _auto_resize=False,
         image=batch,

@@ -85,11 +85,12 @@ def scheduler_loop(child_conn: Connection) -> str:
             if request_queue.qsize() > 1:
                 batch_size = min(request_queue.qsize(), max_batch_size)
             # Parse request batch
-            request_batch: List[Tuple[str, str]] = [request_queue.get() for i in range(batch_size)]
+            request_batch: List[Tuple[str, str, str]] = [request_queue.get() for i in range(batch_size)]
             request_ids: List[str] = [request[0] for request in request_batch]
             image_prompts: List[Image] = [base64_decode_image(request[1]) for request in request_batch]
+            text_prompts: List[str] = [request[2] for request in request_batch]
             # Generate
-            generated_pil_images: List[Image] = generate(pipeline, batch=image_prompts)
+            generated_pil_images: List[Image] = generate(pipeline, text_prompts, batch=image_prompts)
             # Send generated images back to parent process
             generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
             for result in zip(request_ids, generated_images):

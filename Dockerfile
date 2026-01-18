@@ -19,6 +19,9 @@ WORKDIR /app
 #   and use the pip interface. uv's interface does not respect UV_SYSTEM_PYTHON. This is annoying, I'm being forced to maintain 2 lockfiles now.
 RUN uv pip install -r requirements.txt --system
 
+# Increase pipe buffer size to 10MiB otherwise server hangs under load
+RUN sysctl -w fs.pipe-max-size=10485760
+
 EXPOSE 8000
 # App startup
 CMD ["python", "-m", "dreamsculpt_be.main"]

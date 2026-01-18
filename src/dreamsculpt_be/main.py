@@ -53,7 +53,7 @@ async def generate(request: GenerationRequest) -> str:
     request_tracker[request_id] = request_future
 
     # Dispatch request to scheduler
-    app.state.parent_connection.send((request_id, request.image_prompt))
+    app.state.parent_connection.send((request_id, request.image_prompt, request.text_prompt))
     print("request added to queue", flush=True)
 
     # Return the generated image
@@ -141,7 +141,7 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
         1) Convert image into a tar
             - docker save -o dreamsculpt-0.0.4.tar 0.0.4-dreamsculpt:latest 
         2) scp to ec2 instance:
-            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.4.tar ec2-user@52.90.244.114:/home/ec2-user
+            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.4.tar ec2-user@54.161.122.247:/home/ec2-user
             - ~13GB image, this takes like 10 minutes :((
         3) ssh into instance and load image:
             - docker load -i dreamsculpt-0.0.4.tar
@@ -166,5 +166,13 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     - Fixed image preview dragging bug
     - Decoupled IPC listener from main scheduler thread to avoid blocking dispatch. 
 
+1/4/2025
 
+    App works end to end. Generation takes 8.7 seconds, additional optimizations will get it down to 7.5. I notice that generation quality isnt the best - stick figures dont get rendered into acual people. Need to tune prompt
+To Do:
+    - Tag requests with sessionID
+    - Stale request handling: Queue should only contain 1 request for each active session
+    - Tune prompt
+    - Update inference configs to lower generation time
+    - Clean up frontend code
 """
