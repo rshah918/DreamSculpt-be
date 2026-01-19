@@ -1,4 +1,4 @@
-from multiprocessing.connection import Connection
+import multiprocessing
 from dreamsculpt_be.inference_core.generate import mock_generate
 from dreamsculpt_be.config import max_batch_size
 from dreamsculpt_be.config import model_path
@@ -65,25 +65,24 @@ def load_model() -> FluxKontextPipeline:
     return pipeline
 
 
-def ipc_receiver(child_conn: Connection, session_queue: Queue, request_map: dict[str: Tuple[str, str, str]]):
-    # Listen to the IPC pipe and queue up incoming requests. This is done in a seperate thread to avoid blocking dispatch
+def ipc_receiver(ipc_request_queue: multiprocessing.Queue, session_queue: Queue, request_map: dict[str: Tuple[str, str, str]]):
+    # Listen to the IPC queue and queue up incoming requests. This is done in a seperate thread to avoid blocking dispatch
     while True:
-        while child_conn.poll():
-            request: Tuple[str, str, str, str] = child_conn.recv()
-            session_id: str = str(request[0])
-            if session_id not in request_map.keys():
-                request_map[session_id] = request[1:]
-                session_queue.put(session_id)
-            else:
-                request_map[session_id] = request[1:]
+        request: Tuple[str, str, str, str] = ipc_request_queue.get()
+        session_id: str = str(request[0])
+        if session_id not in request_map.keys():
+            request_map[session_id] = request[1:]
+            session_queue.put(session_id)
+        else:
+            request_map[session_id] = request[1:]
 
 
-def scheduler_loop(child_conn: Connection) -> str:
+def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: multiprocessing.Queue) -> str:
     # load model
     # pipeline = load_model()
     request_map: dict[str: Tuple[str, str, str]] = {}
     session_queue = Queue()
-    Thread(target=ipc_receiver, args=[child_conn, session_queue, request_map], daemon=True).start()
+    Thread(target=ipc_receiver, args=[ipc_request_queue, session_queue, request_map], daemon=True).start()
     while True:
         if not session_queue.empty():
             # Calculate batch size
@@ -106,4 +105,4 @@ def scheduler_loop(child_conn: Connection) -> str:
             # Send generated images back to parent process
             generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
             for result in zip(request_ids, generated_images):
-                child_conn.send(result)
+                ipc_result_queue.put(result)

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from dreamsculpt_be.models.generation_request_schema import GenerationRequest
 from dreamsculpt_be.inference_core.scheduler import scheduler_loop
 import asyncio
-from multiprocessing import Pipe, Process, set_start_method
+from multiprocessing import Queue, Process, set_start_method
 from multiprocessing.connection import Connection
 from typing import Dict
 import uuid
@@ -13,11 +13,11 @@ request_tracker: Dict[str, asyncio.Future] = {}
 
 
 # --- Listen and process completed requests from the scheduler process ---
-async def result_listener(result_pipe: Connection):
+async def result_listener(result_queue: Queue):
     loop = asyncio.get_running_loop()
     while True:
         # Run in seperate thread since pipe.recv() is blocking
-        request_id, generated_image = await loop.run_in_executor(None, result_pipe.recv)
+        request_id, generated_image = await loop.run_in_executor(None, result_queue.get)
         # Resolve the future and remove from tracker
         future = request_tracker.pop(request_id, None)
         if future is not None and not future.done():
@@ -28,10 +28,11 @@ async def result_listener(result_pipe: Connection):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Initialize scheduler and setup IPC
-    app.state.parent_connection, app.state.child_connection = Pipe()
-    scheduler_process = Process(target=scheduler_loop, args=[app.state.child_connection])
+    app.state.ipc_request_queue = Queue()
+    app.state.ipc_result_queue = Queue()
+    scheduler_process = Process(target=scheduler_loop, args=[app.state.ipc_request_queue, app.state.ipc_result_queue])
     scheduler_process.start()
-    asyncio.create_task(result_listener(app.state.parent_connection))
+    asyncio.create_task(result_listener(app.state.ipc_result_queue))
     yield
     print("Shutting Down...", flush=True)
 
@@ -53,7 +54,7 @@ async def generate(request: GenerationRequest, session_id: uuid.UUID = Header())
     request_tracker[request_id] = request_future
 
     # Dispatch request to scheduler
-    app.state.parent_connection.send((session_id, request_id, request.image_prompt, request.text_prompt))
+    app.state.ipc_request_queue.put((session_id, request_id, request.image_prompt, request.text_prompt))
     print("request added to queue", flush=True)
 
     # Return the generated image
