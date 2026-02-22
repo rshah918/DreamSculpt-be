@@ -1,11 +1,11 @@
 from fastapi import FastAPI, Header
 import uvicorn
 from contextlib import asynccontextmanager
-from dreamsculpt_be.models.generation_request_schema import GenerationRequest
+from dreamsculpt_be.models.generation_request import GenerationRequest
+from dreamsculpt_be.models.generation_response import GenerationResponse
 from dreamsculpt_be.inference_core.scheduler import scheduler_loop
 import asyncio
 from multiprocessing import Queue, Process, set_start_method
-from multiprocessing.connection import Connection
 from typing import Dict
 import uuid
 
@@ -16,7 +16,7 @@ request_tracker: Dict[str, asyncio.Future] = {}
 async def result_listener(result_queue: Queue):
     loop = asyncio.get_running_loop()
     while True:
-        # Run in seperate thread since pipe.recv() is blocking
+        # Run in seperate thread since queue.get() is blocking
         request_id, generated_image = await loop.run_in_executor(None, result_queue.get)
         # Resolve the future and remove from tracker
         future = request_tracker.pop(request_id, None)
@@ -46,7 +46,7 @@ def health_check():
     return "System is healthy!"
 
 
-@app.post("/generate")
+@app.post("/generate", response_model = GenerationResponse)
 async def generate(request: GenerationRequest, session_id: uuid.UUID = Header()) -> str:
     # Generate request ID + Future, add to req tracker
     request_id = str(uuid.uuid4())
@@ -60,7 +60,7 @@ async def generate(request: GenerationRequest, session_id: uuid.UUID = Header())
     # Return the generated image
     generated_image: str = await request_future
     print("result generated", flush=True)
-    return generated_image
+    return {"generated_image": generated_image}
 
 
 # --- Server Start ---
@@ -172,12 +172,8 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
 
 1/18/2026
     Added session de-duping in the queue. Now, a max of 1 request per session will be in the queue at any given time. Added a mandatory sessionId header as well
-    
-    To Do:
-    - Tag requests with sessionID
-    - Stale request handling: Queue should only contain 1 request for each active session
-    - Tune prompt
-    - Update inference configs to lower generation time
-    - Clean up frontend code
 
+
+2/21/2026
+    - Added Gemini support
 """

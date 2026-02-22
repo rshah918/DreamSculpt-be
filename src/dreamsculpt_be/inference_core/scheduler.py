@@ -1,13 +1,12 @@
 import multiprocessing
-from dreamsculpt_be.inference_core.generate import mock_generate
-from dreamsculpt_be.config import max_batch_size
-from dreamsculpt_be.config import model_path
-from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
-from PIL.Image import Image
 from typing import List, Tuple
 from queue import Queue
 import torch
 from time import time
+from dreamsculpt_be.inference_core.generate import mock_generate, gemini_generate_batch
+from dreamsculpt_be.config import MAX_BATCH_SIZE, MODEL_PATH, USE_EXTERNAL_MODEL
+from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
+from PIL import Image
 from diffusers import (
     FluxTransformer2DModel,
     GGUFQuantizationConfig,
@@ -16,6 +15,7 @@ from diffusers import (
 )
 from transformers import BitsAndBytesConfig, T5EncoderModel
 from threading import Thread
+from google.genai import Client
 
 
 def load_model() -> FluxKontextPipeline:
@@ -36,7 +36,7 @@ def load_model() -> FluxKontextPipeline:
     )
 
     transformer = FluxTransformer2DModel.from_single_file(
-        model_path,
+        MODEL_PATH,
         quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16),
         torch_dtype=torch.bfloat16,
         config="black-forest-labs/FLUX.1-Kontext-dev",
@@ -78,9 +78,12 @@ def ipc_receiver(ipc_request_queue: multiprocessing.Queue, session_queue: Queue,
 
 
 def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: multiprocessing.Queue) -> str:
-    # load model
-    # pipeline = load_model()
-    request_map: dict[str: Tuple[str, str, str]] = {}
+    # load model / initialize gemini client
+    if USE_EXTERNAL_MODEL:
+        client = Client()
+    else:
+        pipeline = load_model()
+    request_map: dict[str: Tuple[str, str, str]] = {} # session_id: [request_id, image_prompt, text_prompt]
     session_queue = Queue()
     Thread(target=ipc_receiver, args=[ipc_request_queue, session_queue, request_map], daemon=True).start()
     while True:
@@ -88,9 +91,9 @@ def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: m
             # Calculate batch size
             batch_size: int = 1
             if session_queue.qsize() > 1:
-                batch_size = min(session_queue.qsize(), max_batch_size)
+                batch_size = min(session_queue.qsize(), MAX_BATCH_SIZE)
             # Parse request batch
-            session_batch: List[Tuple[str, str, str]] = [str(session_queue.get()) for _ in range(batch_size)]
+            session_batch: List[str] = [str(session_queue.get()) for _ in range(batch_size)] # 
             request_batch = [request_map[session_id] for session_id in session_batch]
             # Clean up request tracker
             for session_id, request_id in zip(session_batch, request_batch):
@@ -98,10 +101,10 @@ def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: m
                     del request_map[session_id]
 
             request_ids: List[str] = [request[0] for request in request_batch]
-            image_prompts: List[Image] = [base64_decode_image(request[1]) for request in request_batch]
+            image_prompts: List[Image.Image] = [base64_decode_image(request[1]) for request in request_batch]
             text_prompts: List[str] = [request[2] for request in request_batch]
             # Generate
-            generated_pil_images: List[Image] = mock_generate(text_prompts, batch=image_prompts)
+            generated_pil_images: List[Image.Image] = gemini_generate_batch(client, text_prompts, image_prompts) if USE_EXTERNAL_MODEL else mock_generate(text_prompts, batch=image_prompts)
             # Send generated images back to parent process
             generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
             for result in zip(request_ids, generated_images):
