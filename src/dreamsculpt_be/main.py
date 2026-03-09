@@ -1,27 +1,32 @@
 from fastapi import FastAPI, Header
+from fastapi.exceptions import HTTPException
 import uvicorn
 from contextlib import asynccontextmanager
 from dreamsculpt_be.models.generation_request import GenerationRequest
 from dreamsculpt_be.models.generation_response import GenerationResponse
 from dreamsculpt_be.inference_core.scheduler import scheduler_loop
+from dreamsculpt_be.config import GENERATIONS_REMAINING
 import asyncio
 from multiprocessing import Queue, Process, set_start_method
 from typing import Dict
 import uuid
 
 request_tracker: Dict[str, asyncio.Future] = {}
-
+remaining_generations: int = GENERATIONS_REMAINING
 
 # --- Listen and process completed requests from the scheduler process ---
 async def result_listener(result_queue: Queue):
     loop = asyncio.get_running_loop()
     while True:
         # Run in seperate thread since queue.get() is blocking
-        request_id, generated_image = await loop.run_in_executor(None, result_queue.get)
+        request_id, response = await loop.run_in_executor(None, result_queue.get)
         # Resolve the future and remove from tracker
         future = request_tracker.pop(request_id, None)
         if future is not None and not future.done():
-            future.set_result(generated_image)
+            if response["error"]:
+                future.set_exception(HTTPException(status_code=response["error"]["status_code"], detail=response["error"]["detail"]))
+            else:
+                future.set_result(response["result"])
 
 
 # --- Startup tasks: Start scheduler and listener ---
@@ -140,12 +145,12 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     LFG! I am able to start the container locally and hit the /generate and /health endpoints!
     Deployment:
         1) Convert image into a tar
-            - docker save -o dreamsculpt-0.0.5.tar 0.0.4-dreamsculpt:latest 
+            - docker save -o dreamsculpt-0.0.6.tar 0.0.6-dreamsculpt:latest 
         2) scp to ec2 instance:
-            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.5.tar ec2-user@54.161.122.247:/home/ec2-user
+            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.6.tar ec2-user@3.216.124.145:/home/ec2-user
             - ~13GB image, this takes like 10 minutes :((
         3) ssh into instance and load image:
-            - docker load -i dreamsculpt-0.0.5.tar
+            - docker load -i dreamsculpt-0.0.6.tar
         4) Start container:
             - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 --gpus all <image_id>
 
@@ -176,4 +181,17 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
 
 2/21/2026
     - Added Gemini support
+
+3/1/2026
+    - Added Generate button to frontend.
+
+3/8/2026
+    - Server side generation limit enforcement
+    - Enhance error handling to propagate scheduler exceptions back to main process
+
+To Do:
+    - t3 micro is too small, try medium
+        - install docker first or find AMI with docker installed
+    - Each image generation is $0.039. I need to set a daily generation limit. Enforce this in the frontend.
+    - Investigate why CPU usage is so high.
 """

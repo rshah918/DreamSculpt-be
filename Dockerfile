@@ -17,7 +17,7 @@ ADD . /app
 WORKDIR /app
 # uv doesnt allow you to directly install lockfile dependencies to the system env. Need to first export to requirements.txt,
 #   and use the pip interface. uv's interface does not respect UV_SYSTEM_PYTHON. This is annoying, I'm being forced to maintain 2 lockfiles now.
-RUN uv pip install -r requirements.txt --systems
+RUN uv pip install -r requirements.txt --system
 
 EXPOSE 8000
 # App startup

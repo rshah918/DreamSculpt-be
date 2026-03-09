@@ -6,6 +6,7 @@ from time import time
 from dreamsculpt_be.inference_core.generate import mock_generate, gemini_generate_batch
 from dreamsculpt_be.config import MAX_BATCH_SIZE, MODEL_PATH, USE_EXTERNAL_MODEL
 from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
+from fastapi.exceptions import HTTPException
 from PIL import Image
 from diffusers import (
     FluxTransformer2DModel,
@@ -75,6 +76,7 @@ def ipc_receiver(ipc_request_queue: multiprocessing.Queue, session_queue: Queue,
             session_queue.put(session_id)
         else:
             request_map[session_id] = request[1:]
+            print(f"Overwriting session: {session_id} with request_id {request[1]}")
 
 
 def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: multiprocessing.Queue) -> str:
@@ -88,6 +90,7 @@ def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: m
     Thread(target=ipc_receiver, args=[ipc_request_queue, session_queue, request_map], daemon=True).start()
     while True:
         if not session_queue.empty():
+            print(f"Session Queue: {session_queue.qsize()}")
             # Calculate batch size
             batch_size: int = 1
             if session_queue.qsize() > 1:
@@ -104,8 +107,16 @@ def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: m
             image_prompts: List[Image.Image] = [base64_decode_image(request[1]) for request in request_batch]
             text_prompts: List[str] = [request[2] for request in request_batch]
             # Generate
-            generated_pil_images: List[Image.Image] = gemini_generate_batch(client, text_prompts, image_prompts) if USE_EXTERNAL_MODEL else mock_generate(text_prompts, batch=image_prompts)
-            # Send generated images back to parent process
-            generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
-            for result in zip(request_ids, generated_images):
-                ipc_result_queue.put(result)
+            try:
+                generated_pil_images: List[Image.Image] = gemini_generate_batch(client, text_prompts, image_prompts) if USE_EXTERNAL_MODEL else mock_generate(text_prompts, batch=image_prompts)
+                # Send generated images back to parent process
+                generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
+                for request_id, generated_image in zip(request_ids, generated_images):
+                    ipc_result_queue.put((request_id, {"result": generated_image, "error": None}))
+            except HTTPException as e:
+                for request_id in request_ids:
+                    ipc_result_queue.put((request_id, {"result": None, "error": {"status_code": e.status_code, "detail": e.detail}}))
+
+            except Exception as e:
+                for request_id in request_ids:
+                    ipc_result_queue.put((request_id, {"result": None, "error": {"status_code": 500, "detail": str(e)}}))

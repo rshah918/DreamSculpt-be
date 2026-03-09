@@ -11,13 +11,14 @@ from transformers import BitsAndBytesConfig, T5EncoderModel
 from PIL import Image
 from torchinfo import summary
 
-prompt = "Transform this rough sketch into an awe-inspiring, photorealistic image. Render every element as if it exists in the real world with natural textures, lifelike materials, and fine detail. Add realistic depth, dramatic lighting, and atmospheric effects such as reflections, sky, and shadows. The final result should look like a stunning photograph, true to the layout of the sketch but elevated into a vivid, breathtaking real-world scene"
+
+prompt = "Transform this rough sketch into an awe-inspiring, photorealistic image as if it exists in the real world with natural textures, lifelike materials, and fine detail. Add realistic depth, dramatic lighting, and atmospheric effects such as reflections, sky, and shadows. The final result should look like a stunning photograph, true to the layout of the sketch but elevated into a vivid, breathtaking real-world scene"
 ckpt_path = "https://huggingface.co/QuantStack/FLUX.1-Kontext-dev-GGUF/blob/main/flux1-kontext-dev-Q5_0.gguf"
 
 model_load_start = time()
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
-    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_compute_dtype=torch.float16,
     bnb_4bit_use_double_quant=True,
     bnb_4bit_quant_type="nf4",
 )
@@ -26,26 +27,28 @@ text_encoder_2 = T5EncoderModel.from_pretrained(
     "black-forest-labs/FLUX.1-Kontext-dev",
     subfolder="text_encoder_2",
     quantization_config=bnb_config,
-    torch_dtype=torch.bfloat16,
+    torch_dtype=torch.float16,
     device_map="auto",  # Auto-offload if needed (falls back to CPU for overflow)
 )
 
 transformer = FluxTransformer2DModel.from_single_file(
     ckpt_path,
-    quantization_config=GGUFQuantizationConfig(compute_dtype=torch.bfloat16),
-    torch_dtype=torch.bfloat16,
+    quantization_config=GGUFQuantizationConfig(compute_dtype=torch.float16),
+    torch_dtype=torch.float16,
+    attn_implementation="flash_attention_2",
     config="black-forest-labs/FLUX.1-Kontext-dev",
     subfolder="transformer",
 )
-vae = AutoencoderKL.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", subfolder="vae", torch_dtype=torch.bfloat16)
+vae = AutoencoderKL.from_pretrained("black-forest-labs/FLUX.1-Kontext-dev", subfolder="vae", torch_dtype=torch.float16)
 
 pipeline = FluxKontextPipeline.from_pretrained(
     "black-forest-labs/FLUX.1-Kontext-dev",
     transformer=transformer,
     vae=vae,
     text_encoder_2=text_encoder_2,
-    torch_dtype=torch.bfloat16,
+    torch_dtype=torch.float16,
 ).to("cuda")
+
 
 # Resolution (adjust for your needs; must be divisible by 16)
 img_height = 512
@@ -58,43 +61,17 @@ text_seq_len = 256  # example max text tokens
 
 # Device and dtype matching your GGUF quantized model
 device = transformer.device
-dtype = torch.bfloat16
+dtype = torch.float16
 
-# Dummy inputs
-dummy_hidden_states = torch.randn(1, img_seq_len, 64, dtype=dtype).to(device)  # packed latents
-dummy_encoder_hidden_states = torch.randn(1, text_seq_len, 4096, dtype=dtype).to(device)  # T5 embeds
-dummy_pooled_projections = torch.randn(1, 768, dtype=dtype).to(device)
-dummy_timestep = torch.tensor([999], dtype=torch.long).to(device)
-dummy_guidance = torch.tensor([5.0], dtype=dtype).to(device)  # guidance_scale
-
-# Positional embeddings (required!)
-# img_ids: (batch, img_seq_len, 3) - for theta in RoPE (time, height, width)
 dummy_img_ids = torch.zeros(1, img_seq_len, 3, dtype=dtype).to(device)
 
 # txt_ids: (batch, text_seq_len, 3)
 dummy_txt_ids = torch.zeros(1, text_seq_len, 3, dtype=dtype).to(device)
 
-# summary(
-#     transformer,
-#     input_data={
-#         "hidden_states": dummy_hidden_states,
-#         "encoder_hidden_states": dummy_encoder_hidden_states,
-#         "pooled_projections": dummy_pooled_projections,
-#         "timestep": dummy_timestep,
-#         "guidance": dummy_guidance,
-#         "img_ids": dummy_img_ids,
-#         "txt_ids": dummy_txt_ids,
-#     },
-#     col_names=["input_size", "output_size", "num_params", "trainable"],
-#     verbose=1,
-#     depth=4,  # shows deeper nesting (blocks, attentions, etc.)
-#     device=device,
-# )
-
-# pipeline.transformer = torch.compile(pipeline.transformer)
-# pipeline.text_encoder_2 = torch.compile(pipeline.text_encoder_2)
+pipeline.transformer = torch.compile(pipeline.transformer, mode="max-autotune")
+# pipeline.text_encoder_2 = torch.compile(pipeline.text_encoder_2, mode="max-autotune")
 # pipeline.vae.to(memory_format=torch.channels_last)
-# pipeline.vae = torch.compile(pipeline.vae)
+# pipeline.vae = torch.compile(pipeline.vae, mode="max-autotune")
 # pipeline.enable_model_cpu_offload(device="cuda")
 # pipeline.scheduler = FlowMatchEulerDiscreteScheduler.from_config(
 #     pipeline.scheduler.config,
@@ -107,7 +84,7 @@ print(f"Model Loaded in {model_load_end - model_load_start} seconds")
 
 def generate_batch(batch_size: int = 1, input_height_width=256, output_height_width=512):
     image = load_image("./test_input.png").resize(
-        (input_height_width, input_height_width),  # or keep aspect ratio and pad
+        (input_height_width, input_height_width), 
         Image.LANCZOS,
     )
     image.save("200x200_input.png")
@@ -130,14 +107,15 @@ def generate_batch(batch_size: int = 1, input_height_width=256, output_height_wi
     images.save("gguf_image.png")
 
 
-generate_batch(1)  # dummy generation to compile graph
-generate_batch(1)
-generate_batch(2)  # dummy generation to compile graph
-generate_batch(2)
+# generate_batch(1)  # dummy generation to compile graph
+# generate_batch(1)
+# generate_batch(2)  # dummy generation to compile graph
+# generate_batch(2)
 generate_batch(1, 200)  # dummy generation to compile graph
 generate_batch(1, 200)
-generate_batch(2, 200)  # dummy generation to compile graph
-generate_batch(2, 200)
+generate_batch(1, 200)
+# generate_batch(2, 200)  # dummy generation to compile graph
+# generate_batch(2, 200)
 
 
 """
@@ -304,12 +282,13 @@ Learnings:
     - I can revert to batching by shrinking canvas dim to 200x200, while generation dim is 512x512
     - 512x512 output results in poor prompt adherence. Raising guidance_scale 3.5->5 fixed it.
   
-To do:
-    - Alright so batching is finally figured out. I'd like to eventually explore int8 inference as A10 has twice as many OPS, first pass search didnt yield any available int8 Flux Kontext quants.
-    - I'll start working on the core server:
-        - First, implement the queueing mechanism
-            - Batch if queue size > 1
-        - Stream after each denoising step to hide latency on UI
+1/4/2026
+
+Switching to float16 lowered inference from 8.7 to 8.3 seconds 
+max-autotune (just transfomer) lowered inference time from 8.3 to 7.57 seconds
+    - compialtion takes ~7 minutes
+
+    
 
 
 """
