@@ -4,7 +4,7 @@ from queue import Queue
 import torch
 from time import time
 from dreamsculpt_be.inference_core.generate import mock_generate, gemini_generate_batch
-from dreamsculpt_be.config import MAX_BATCH_SIZE, MODEL_PATH, USE_EXTERNAL_MODEL
+from dreamsculpt_be.config import MAX_BATCH_SIZE, MODEL_PATH, USE_EXTERNAL_MODEL, GENERATIONS_REMAINING
 from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
 from fastapi.exceptions import HTTPException
 from PIL import Image
@@ -18,6 +18,7 @@ from transformers import BitsAndBytesConfig, T5EncoderModel
 from threading import Thread
 from google.genai import Client
 
+remaining_generations: int = GENERATIONS_REMAINING
 
 def load_model() -> FluxKontextPipeline:
     model_load_start = time()

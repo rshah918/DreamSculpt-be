@@ -5,14 +5,12 @@ from contextlib import asynccontextmanager
 from dreamsculpt_be.models.generation_request import GenerationRequest
 from dreamsculpt_be.models.generation_response import GenerationResponse
 from dreamsculpt_be.inference_core.scheduler import scheduler_loop
-from dreamsculpt_be.config import GENERATIONS_REMAINING
 import asyncio
 from multiprocessing import Queue, Process, set_start_method
 from typing import Dict
 import uuid
 
 request_tracker: Dict[str, asyncio.Future] = {}
-remaining_generations: int = GENERATIONS_REMAINING
 
 # --- Listen and process completed requests from the scheduler process ---
 async def result_listener(result_queue: Queue):

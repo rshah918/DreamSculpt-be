@@ -8,7 +8,7 @@ from fastapi.exceptions import HTTPException
 from google.genai import Client
 from google.genai.types import GenerateContentConfig, ImageConfig, GenerateContentResponse
 from dreamsculpt_be.config import ASPECT_RATIO, RESOLUTION
-import dreamsculpt_be.main as main
+import dreamsculpt_be.inference_core.scheduler as scheduler
 from concurrent.futures import ThreadPoolExecutor
 
 def mock_generate(
@@ -51,7 +51,7 @@ def generate(
     return images
 
 def gemini_generate_batch(client: Client, text_prompts: List[str], image_prompts: List[Image.Image]) -> List[Image.Image]:
-    if main.remaining_generations < len(image_prompts):
+    if scheduler.remaining_generations < len(image_prompts):
         raise HTTPException(status_code=429, detail="Gemini generation limit reached!")
     
     # Gemini API only allows single image generation. Spawn threads to process batch in parallel
@@ -62,7 +62,7 @@ def gemini_generate_batch(client: Client, text_prompts: List[str], image_prompts
                 zip(text_prompts, image_prompts)
             )
         )
-    main.remaining_generations -= len(image_prompts)
+    scheduler.remaining_generations -= len(image_prompts)
     return results
 
 def gemini_generate(client: Client, text_prompt: str, image_prompt: str) -> Image.Image:
