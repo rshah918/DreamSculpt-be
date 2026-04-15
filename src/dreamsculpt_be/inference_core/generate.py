@@ -1,15 +1,17 @@
-from PIL import Image
 from io import BytesIO
 from typing import List
 from time import sleep, time
-import torch
-from diffusers import FluxKontextPipeline
 from fastapi.exceptions import HTTPException
 from google.genai import Client
 from google.genai.types import GenerateContentConfig, ImageConfig, GenerateContentResponse
-from dreamsculpt_be.config import ASPECT_RATIO, RESOLUTION
+from dreamsculpt_be.config import ASPECT_RATIO, RESOLUTION, USE_EXTERNAL_MODEL
+from PIL import Image
 import dreamsculpt_be.inference_core.scheduler as scheduler
 from concurrent.futures import ThreadPoolExecutor
+
+if not USE_EXTERNAL_MODEL:
+    import torch # pyright: ignore[reportMissingImports]
+    from diffusers import FluxKontextPipeline # pyright: ignore[reportMissingImports]
 
 def mock_generate(
     text_prompts, batch: List[Image.Image], input_height_width=200, output_height_width=512
@@ -19,7 +21,7 @@ def mock_generate(
 
 
 def generate(
-    pipeline: FluxKontextPipeline,
+    pipeline,
     text_prompts,
     batch: List[Image.Image],
     input_height_width=200,

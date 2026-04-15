@@ -1,26 +1,28 @@
 import multiprocessing
 from typing import List, Tuple
 from queue import Queue
-import torch
 from time import time
 from dreamsculpt_be.inference_core.generate import mock_generate, gemini_generate_batch
 from dreamsculpt_be.config import MAX_BATCH_SIZE, MODEL_PATH, USE_EXTERNAL_MODEL, GENERATIONS_REMAINING
 from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
 from fastapi.exceptions import HTTPException
-from PIL import Image
-from diffusers import (
-    FluxTransformer2DModel,
-    GGUFQuantizationConfig,
-    FluxKontextPipeline,
-    AutoencoderKL,
-)
-from transformers import BitsAndBytesConfig, T5EncoderModel
 from threading import Thread
 from google.genai import Client
 
+if not USE_EXTERNAL_MODEL:
+    import torch # pyright: ignore[reportMissingImports]
+    from PIL import Image # pyright: ignore[reportMissingImports]
+    from diffusers import ( # pyright: ignore[reportMissingImports]
+        FluxTransformer2DModel,
+        GGUFQuantizationConfig,
+        FluxKontextPipeline,
+        AutoencoderKL,
+    )
+    from transformers import BitsAndBytesConfig, T5EncoderModel # pyright: ignore[reportMissingImports]
+
 remaining_generations: int = GENERATIONS_REMAINING
 
-def load_model() -> FluxKontextPipeline:
+def load_model():
     model_load_start = time()
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
