@@ -5,12 +5,15 @@ from contextlib import asynccontextmanager
 from dreamsculpt_be.models.generation_request import GenerationRequest
 from dreamsculpt_be.models.generation_response import GenerationResponse
 from dreamsculpt_be.inference_core.scheduler import scheduler_loop
+from dreamsculpt_be.utils.logging import publish_logs
 import asyncio
 from multiprocessing import Queue, Process, set_start_method
 from typing import Dict
 import uuid
+import boto3
 
 request_tracker: Dict[str, asyncio.Future] = {}
+s3_client = boto3.client('s3')
 
 # --- Listen and process completed requests from the scheduler process ---
 async def result_listener(result_queue: Queue):
@@ -63,6 +66,7 @@ async def generate(request: GenerationRequest, session_id: uuid.UUID = Header())
     # Return the generated image
     generated_image: str = await request_future
     print("result generated", flush=True)
+    publish_logs(s3_client, request_id, request.text_prompt, request.image_prompt, generated_image)
     return {"generated_image": generated_image}
 
 
@@ -141,16 +145,23 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     uv noticed that the torch version in the lockfile differed from that in the base image, which triggered the re-download!
 
     LFG! I am able to start the container locally and hit the /generate and /health endpoints!
-    Deployment:
+    DreamSculpt Deployment:
         1) Convert image into a tar
-            - docker save -o dreamsculpt-0.0.6.tar 0.0.6-dreamsculpt:latest 
+            - docker save -o dreamsculpt-0.0.9.tar dreamsculpt:0.0.9 
         2) scp to ec2 instance:
-            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.6.tar ec2-user@3.216.124.145:/home/ec2-user
+            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.9.tar ec2-user@13.221.123.53:/home/ec2-user
             - ~13GB image, this takes like 10 minutes :((
         3) ssh into instance and load image:
-            - docker load -i dreamsculpt-0.0.6.tar
+            - docker load -i dreamsculpt-0.0.9.tar
         4) Start container:
             - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 --gpus all <image_id>
+            - docker run -e GEMINI_API_KEY=<GEMINI TOKEN> -p 8000:8000 <image_id
+    
+    Log Viewer Deployment:
+        1) docker build -t dreamsculpt-log-viewer:latest -f Dockerfile.log-viewer .
+        2) docker save -o dreamsculpt-log-viewer-0.0.1.tar
+        3) scp -i "Rahul Key Pair.pem" dreamsculpt-log-viewer-0.0.1.tar ec2-user@13.221.123.53:/home/ec2-user
+        3) docker run -p 8501:8501 <image_id>
 
     Okay, now lets connect the server to the AI inference pipeline and redeploy
 
@@ -187,9 +198,26 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     - Server side generation limit enforcement
     - Enhance error handling to propagate scheduler exceptions back to main process
 
+3/11/2026
+    - Reworked dependency groups to try to slim down image size when using gemini. Hopefully I can deploy to a smaller instance size
+    - Ugh. Ok use am arm64 instance. I accidentally spun up an amd64 instance. 
+
+3/14/2026
+    - Fixed some import issues because I removed pytorch from the container. 
+
+
+3/18/2026
+
+    - HOLY FUCK!
+    - Used sslip to assign my ec2 instance a domain name thats its IP + ".sslip.io"
+    - This allowed me to use caddy to create an HTTP termination proxy with automatic SSL certificate generation
+    - Downloaded Dreamsculpt onto my Iphone!
+
+    - Bugs:
+        - Tool picker isnt aligned to the bottom of the screen
+        - Make the prompt bar auto-collapse to minimize canvas occlusion
+        - Set gemini price limit for this API key
+
 To Do:
-    - t3 micro is too small, try medium
-        - install docker first or find AMI with docker installed
-    - Each image generation is $0.039. I need to set a daily generation limit. Enforce this in the frontend.
     - Investigate why CPU usage is so high.
 """

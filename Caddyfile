@@ -1,0 +1,15 @@
+13.221.123.53.sslip.io {
+
+    # Streamlit logs UI
+    handle_path /logs/* {
+        basicauth {
+            admin $2a$14$SXrzC0Em4JitNLv3WqLiDu.F1VH0/GTVtbzhixb9ot/2pY3fpjq9m
+        }
+        reverse_proxy localhost:8501
+    }
+
+    # FastAPI (everything else)
+    handle {
+        reverse_proxy localhost:8000
+    }
+}

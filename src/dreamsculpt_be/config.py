@@ -1,4 +1,9 @@
 import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+env_path = Path(__file__).parent / "env" / ".env.local"
+load_dotenv(dotenv_path=env_path)
 
 MODEL_PATH = "https://huggingface.co/QuantStack/FLUX.1-Kontext-dev-GGUF/blob/main/flux1-kontext-dev-Q5_0.gguf"
 MODEL_PROMPT = "Transform this rough sketch into an awe-inspiring, photorealistic image. Render every element as if it exists in the real world with natural textures, lifelike materials, and fine detail. Add realistic depth, dramatic lighting, and atmospheric effects such as reflections, sky, and shadows. The final result should look like a stunning photograph, true to the layout of the sketch but elevated into a vivid, breathtaking real-world scene"
@@ -14,3 +19,6 @@ ASPECT_RATIO = "1:1"
 RESOLUTION = "1K"
 GEMINI_API_KEY=os.getenv("GEMINI_API_KEY", "MISSING_API_KEY")
 GENERATIONS_REMAINING = 100
+
+# Logging
+USER_LOGS_S3_BUCKET = "dreamsculpt-logs"
