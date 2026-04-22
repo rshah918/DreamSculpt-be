@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from typing import Literal
 
 env_path = Path(__file__).parent / "env" / ".env.local"
 load_dotenv(dotenv_path=env_path)
@@ -12,13 +13,19 @@ GENERATION_WIDTH = 512
 NUM_INFERENCE_STEPS = 15
 GUIDANCE_SCALE = 5.0
 MAX_BATCH_SIZE = 2
-USE_EXTERNAL_MODEL = True
 
-# Gemini Configs
+#Generic External Model Configs
+EXTERNAL_MODEL: None | Literal["GROK"] | Literal["GEMINI"] = "GROK"
 ASPECT_RATIO = "1:1"
 RESOLUTION = "1K"
-GEMINI_API_KEY=os.getenv("GEMINI_API_KEY", "MISSING_API_KEY")
 GENERATIONS_REMAINING = 100
+
+# Gemini Configs
+GEMINI_API_KEY=os.getenv("GEMINI_API_KEY", "MISSING_API_KEY")
+
+# Grok Configs
+GROK_MODEL = "grok-imagine-image"
+GROK_API_KEY = os.getenv("XAI_API_KEY", "MISSING_API_KEY")
 
 # Logging
 USER_LOGS_S3_BUCKET = "dreamsculpt-logs"

@@ -38,9 +38,12 @@ async def lifespan(app: FastAPI):
     app.state.ipc_result_queue = Queue()
     scheduler_process = Process(target=scheduler_loop, args=[app.state.ipc_request_queue, app.state.ipc_result_queue])
     scheduler_process.start()
-    asyncio.create_task(result_listener(app.state.ipc_result_queue))
+    listener_task = asyncio.create_task(result_listener(app.state.ipc_result_queue))
     yield
     print("Shutting Down...", flush=True)
+    scheduler_process.terminate()
+    scheduler_process.join()
+    listener_task.cancel()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -49,7 +52,7 @@ app = FastAPI(lifespan=lifespan)
 # --- Endpoints ---
 @app.get("/health")
 def health_check():
-    return "System is healthy!"
+    return {"status": "healthy"}
 
 
 @app.post("/generate", response_model = GenerationResponse)
@@ -66,7 +69,7 @@ async def generate(request: GenerationRequest, session_id: uuid.UUID = Header())
     # Return the generated image
     generated_image: str = await request_future
     print("result generated", flush=True)
-    publish_logs(s3_client, request_id, request.text_prompt, request.image_prompt, generated_image)
+    publish_logs(s3_client, str(session_id), request.text_prompt, request.image_prompt, generated_image)
     return {"generated_image": generated_image}
 
 
@@ -147,9 +150,9 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
     LFG! I am able to start the container locally and hit the /generate and /health endpoints!
     DreamSculpt Deployment:
         1) Convert image into a tar
-            - docker save -o dreamsculpt-0.0.9.tar dreamsculpt:0.0.9 
+            - docker save -o dreamsculpt-0.1.0.tar dreamsculpt:latest
         2) scp to ec2 instance:
-            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.0.9.tar ec2-user@13.221.123.53:/home/ec2-user
+            - scp -i "Rahul Key Pair.pem" dreamsculpt-0.1.0.tar ec2-user@13.221.123.53:/home/ec2-user
             - ~13GB image, this takes like 10 minutes :((
         3) ssh into instance and load image:
             - docker load -i dreamsculpt-0.0.9.tar
@@ -218,6 +221,21 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
         - Make the prompt bar auto-collapse to minimize canvas occlusion
         - Set gemini price limit for this API key
 
+04/22/2026
+
+    - Massive Docker build cache optimization
+        - Reordered and consolidated image layers, reduced build time by >90%
+    - Added Grok integration
+        - 50% inference cost reduction ($0.039 -> $0.02 per image)
+    - Code quality enhancements
+        - Fixed error handling and type annotations
+    - Scheduler CPU usage optimization
+        - Remove idle CPU spin with blocking queue retreival method
+    - Dependency management upgrades
+        - Remove the need for a Pipfile.lock by pointing UV_PROJECT_ENVIRONMENT to the system env
 To Do:
-    - Investigate why CPU usage is so high.
+    - Logging enhancements
+    - 
+
+
 """

@@ -2,14 +2,17 @@ from io import BytesIO
 from typing import List
 from time import sleep, time
 from fastapi.exceptions import HTTPException
-from google.genai import Client
+from google.genai import Client as GeminiClient
 from google.genai.types import GenerateContentConfig, ImageConfig, GenerateContentResponse
-from dreamsculpt_be.config import ASPECT_RATIO, RESOLUTION, USE_EXTERNAL_MODEL
+from xai_sdk import Client as GrokClient
+from dreamsculpt_be.config import ASPECT_RATIO, RESOLUTION, EXTERNAL_MODEL, GROK_MODEL
+from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
 from PIL import Image
 import dreamsculpt_be.inference_core.scheduler as scheduler
+import base64
 from concurrent.futures import ThreadPoolExecutor
 
-if not USE_EXTERNAL_MODEL:
+if EXTERNAL_MODEL == None:
     import torch # pyright: ignore[reportMissingImports]
     from diffusers import FluxKontextPipeline # pyright: ignore[reportMissingImports]
 
@@ -52,7 +55,7 @@ def generate(
     print(f"Image generated in {generation_end - generation_start} seconds")
     return images
 
-def gemini_generate_batch(client: Client, text_prompts: List[str], image_prompts: List[Image.Image]) -> List[Image.Image]:
+def gemini_generate_batch(client: GeminiClient, text_prompts: List[str], image_prompts: List[Image.Image]) -> List[Image.Image]:
     if scheduler.remaining_generations < len(image_prompts):
         raise HTTPException(status_code=429, detail="Gemini generation limit reached!")
     
@@ -67,8 +70,8 @@ def gemini_generate_batch(client: Client, text_prompts: List[str], image_prompts
     scheduler.remaining_generations -= len(image_prompts)
     return results
 
-def gemini_generate(client: Client, text_prompt: str, image_prompt: str) -> Image.Image:
-    config: GenerateContentConfig = GenerateContentConfig(response_modalities=['IMAGE'], image_config=ImageConfig(aspect_ratio=ASPECT_RATIO, image_size=RESOLUTION))
+def gemini_generate(client: GeminiClient, text_prompt: str, image_prompt: str) -> Image.Image:
+    config: GenerateContentConfig = GenerateContentConfig(response_modalities=['IMAGE'], image_config=ImageConfig(aspect_ratio=ASPECT_RATIO, image_size=RESOLUTION.upper()))
 
     response: GenerateContentResponse = client.models.generate_content(model="gemini-2.5-flash-image", contents=[text_prompt, image_prompt], config=config)
     for part in response.parts:
@@ -77,3 +80,28 @@ def gemini_generate(client: Client, text_prompt: str, image_prompt: str) -> Imag
             image_bytes = part.inline_data.data
             return Image.open(BytesIO(image_bytes)).convert("RGB")
 
+def grok_generate_batch(client: GrokClient, text_prompts: List[str], image_prompts: List[str]) -> List[Image.Image]:
+    if scheduler.remaining_generations < len(image_prompts):
+        raise HTTPException(status_code=429, detail="Grok generation limit reached!")
+    
+    # Spawn threads to dispatch batch in parallel
+    with ThreadPoolExecutor(max_workers=len(text_prompts)) as executor:
+        results = list(
+            executor.map(
+                lambda args: grok_generate(client, *args),
+                zip(text_prompts, image_prompts)
+            )
+        )
+    scheduler.remaining_generations -= len(image_prompts)
+    return results
+
+def grok_generate(client: GrokClient, text_prompt: str, image_prompt: str) -> Image.Image:
+    response = client.image.sample(
+    prompt=text_prompt,
+    model=GROK_MODEL,
+    image_url=image_prompt,
+    image_format="base64",
+    resolution=RESOLUTION.lower(),
+    aspect_ratio=ASPECT_RATIO
+    )
+    return base64_decode_image(base64.b64encode(response.image).decode('utf-8'))

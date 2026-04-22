@@ -2,14 +2,13 @@ import multiprocessing
 from typing import List, Tuple
 from queue import Queue
 from time import time
-from dreamsculpt_be.inference_core.generate import mock_generate, gemini_generate_batch
-from dreamsculpt_be.config import MAX_BATCH_SIZE, MODEL_PATH, USE_EXTERNAL_MODEL, GENERATIONS_REMAINING
-from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image
+from dreamsculpt_be.inference_core.generate import grok_generate_batch, mock_generate, gemini_generate_batch
+from dreamsculpt_be.config import MAX_BATCH_SIZE, MODEL_PATH, EXTERNAL_MODEL, GENERATIONS_REMAINING
+from dreamsculpt_be.utils.utils import base64_encode_image, base64_decode_image, get_client
 from fastapi.exceptions import HTTPException
 from threading import Thread
-from google.genai import Client
 
-if not USE_EXTERNAL_MODEL:
+if EXTERNAL_MODEL is None:
     import torch # pyright: ignore[reportMissingImports]
     from PIL import Image # pyright: ignore[reportMissingImports]
     from diffusers import ( # pyright: ignore[reportMissingImports]
@@ -69,7 +68,7 @@ def load_model():
     return pipeline
 
 
-def ipc_receiver(ipc_request_queue: multiprocessing.Queue, session_queue: Queue, request_map: dict[str: Tuple[str, str, str]]):
+def ipc_receiver(ipc_request_queue: multiprocessing.Queue, session_queue: Queue, request_map: dict[str, Tuple[str, str, str]]):
     # Listen to the IPC queue and queue up incoming requests. This is done in a seperate thread to avoid blocking dispatch
     while True:
         request: Tuple[str, str, str, str] = ipc_request_queue.get()
@@ -84,42 +83,53 @@ def ipc_receiver(ipc_request_queue: multiprocessing.Queue, session_queue: Queue,
 
 def scheduler_loop(ipc_request_queue: multiprocessing.Queue, ipc_result_queue: multiprocessing.Queue) -> str:
     # load model / initialize gemini client
-    if USE_EXTERNAL_MODEL:
-        client = Client()
+    if EXTERNAL_MODEL is not None:
+        client = get_client(EXTERNAL_MODEL)
     else:
         pipeline = load_model()
-    request_map: dict[str: Tuple[str, str, str]] = {} # session_id: [request_id, image_prompt, text_prompt]
+    request_map: dict[str, Tuple[str, str, str]] = {} # session_id: [request_id, image_prompt, text_prompt]
     session_queue = Queue()
     Thread(target=ipc_receiver, args=[ipc_request_queue, session_queue, request_map], daemon=True).start()
     while True:
-        if not session_queue.empty():
-            print(f"Session Queue: {session_queue.qsize()}")
-            # Calculate batch size
-            batch_size: int = 1
-            if session_queue.qsize() > 1:
-                batch_size = min(session_queue.qsize(), MAX_BATCH_SIZE)
-            # Parse request batch
-            session_batch: List[str] = [str(session_queue.get()) for _ in range(batch_size)] # 
-            request_batch = [request_map[session_id] for session_id in session_batch]
-            # Clean up request tracker
-            for session_id, request_id in zip(session_batch, request_batch):
-                if request_map[session_id] == request_id:
-                    del request_map[session_id]
+        # Calculate batch size
+        batch_size: int = 1
+        if session_queue.qsize() > 1:
+            print(f"Session Queue Size: {session_queue.qsize()}")
+            batch_size = min(session_queue.qsize(), MAX_BATCH_SIZE)
+        # Parse request batch
+        session_batch: List[str] = [str(session_queue.get()) for _ in range(batch_size)] # 
+        request_batch = [request_map[session_id] for session_id in session_batch]
+        # Clean up request tracker
+        for session_id, request_id in zip(session_batch, request_batch):
+            if request_map[session_id] == request_id:
+                del request_map[session_id]
 
-            request_ids: List[str] = [request[0] for request in request_batch]
-            image_prompts: List[Image.Image] = [base64_decode_image(request[1]) for request in request_batch]
-            text_prompts: List[str] = [request[2] for request in request_batch]
-            # Generate
-            try:
-                generated_pil_images: List[Image.Image] = gemini_generate_batch(client, text_prompts, image_prompts) if USE_EXTERNAL_MODEL else mock_generate(text_prompts, batch=image_prompts)
-                # Send generated images back to parent process
-                generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
-                for request_id, generated_image in zip(request_ids, generated_images):
-                    ipc_result_queue.put((request_id, {"result": generated_image, "error": None}))
-            except HTTPException as e:
-                for request_id in request_ids:
-                    ipc_result_queue.put((request_id, {"result": None, "error": {"status_code": e.status_code, "detail": e.detail}}))
+        request_ids: List[str] = [request[0] for request in request_batch]
+        text_prompts: List[str] = [request[2] for request in request_batch]
+        # Generate
+        try:
+            generated_pil_images: List[Image.Image]
+            match EXTERNAL_MODEL:
+                case "GEMINI":
+                    image_prompts: List[Image.Image] = [base64_decode_image(request[1]) for request in request_batch]
+                    generated_pil_images = gemini_generate_batch(client, text_prompts, image_prompts)
+                case "GROK":
+                    image_prompts: List[Image.Image] = [request[1] for request in request_batch]
+                    generated_pil_images = grok_generate_batch(client, text_prompts, image_prompts)
+                case None:
+                    image_prompts: List[Image.Image] = [base64_decode_image(request[1]) for request in request_batch]
+                    generated_pil_images = mock_generate(text_prompts, batch=image_prompts)
+                case _:
+                    raise ValueError(f"Invalid value for EXTERNAL_MODEL. Received: {EXTERNAL_MODEL}, Expected 'GROK' | 'GEMINI'")
+            
+            # Send generated images back to parent process
+            generated_images: List[str] = [base64_encode_image(image) for image in generated_pil_images]
+            for request_id, generated_image in zip(request_ids, generated_images):
+                ipc_result_queue.put((request_id, {"result": generated_image, "error": None}))
+        except HTTPException as e:
+            for request_id in request_ids:
+                ipc_result_queue.put((request_id, {"result": None, "error": {"status_code": e.status_code, "detail": e.detail}}))
 
-            except Exception as e:
-                for request_id in request_ids:
-                    ipc_result_queue.put((request_id, {"result": None, "error": {"status_code": 500, "detail": str(e)}}))
+        except Exception as e:
+            for request_id in request_ids:
+                ipc_result_queue.put((request_id, {"result": None, "error": {"status_code": 500, "detail": str(e)}}))
