@@ -11,6 +11,8 @@ from multiprocessing import Queue, Process, set_start_method
 from typing import Dict
 import uuid
 import boto3
+import logging
+
 
 request_tracker: Dict[str, asyncio.Future] = {}
 s3_client = boto3.client('s3')
@@ -155,7 +157,7 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
             - scp -i "Rahul Key Pair.pem" dreamsculpt-0.1.0.tar ec2-user@13.221.123.53:/home/ec2-user
             - ~13GB image, this takes like 10 minutes :((
         3) ssh into instance and load image:
-            - docker load -i dreamsculpt-0.0.9.tar
+            - docker load -i dreamsculpt-0.1.0.tar
         4) Start container:
             - docker run -e HF_TOKEN=<HUGGINGFACE TOKEN> -p 80:8000 --gpus all <image_id>
             - docker run -e GEMINI_API_KEY=<GEMINI TOKEN> -p 8000:8000 <image_id
@@ -235,7 +237,25 @@ Container builds locally. Verfied E2E flow with DrawThings server. Need to fix p
         - Remove the need for a Pipfile.lock by pointing UV_PROJECT_ENVIRONMENT to the system env
 To Do:
     - Logging enhancements
-    - 
+    - Frontend+backend error handling improvements
+    - Deploy changes to backend
 
+    
+05/02/2026
+    - EC2 costs spiked 100% in April (~$22). Turns out, t4g.small is a "burst" instance, meaning you get charged a higher rate ($0.04/hr) if average CPU utilization exceeds the 20% baseline. This is not advertized at instance creation. 
+    I've come to realize that I dont actually know the instance types and naming convention. What does the "t" prefix mean? The number after is the generation, and the suffix is the size. 
+    
+EC2 Learnings:
+    6 categories:
+        - General Purpose, Compute Optimized, Memory Optimized, Storage Optimized, HPC Optimized, Accelerated Computing
+    Naming convention: https://docs.aws.amazon.com/ec2/latest/instancetypes/instance-type-names.html 
+        {series}{generation}{options}.{size}
+        ex: m8ine: m = general purpose, i = intel, n=network/ebs optimized, e=extra memory
 
+            
+        
+    - Deployed 0.1.0:
+        - Switched to Grok backend (50% cost reduction)
+        - Scheduler now uses event-based processing (idle CPU usage reduction 50% -> 0.6%)
+        - Docker build cache optimization
 """

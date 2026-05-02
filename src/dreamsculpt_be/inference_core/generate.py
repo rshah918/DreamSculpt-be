@@ -97,11 +97,11 @@ def grok_generate_batch(client: GrokClient, text_prompts: List[str], image_promp
 
 def grok_generate(client: GrokClient, text_prompt: str, image_prompt: str) -> Image.Image:
     response = client.image.sample(
-    prompt=text_prompt,
-    model=GROK_MODEL,
-    image_url=image_prompt,
-    image_format="base64",
-    resolution=RESOLUTION.lower(),
-    aspect_ratio=ASPECT_RATIO
-    )
+        prompt=text_prompt,
+        model=GROK_MODEL,
+        image_url=image_prompt,
+        image_format="base64",
+        resolution=RESOLUTION.lower(),
+        aspect_ratio=ASPECT_RATIO
+        )
     return base64_decode_image(base64.b64encode(response.image).decode('utf-8'))

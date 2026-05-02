@@ -23,6 +23,7 @@ def base64_encode_image(pil_image: Image.Image) -> str:
 
 
 def base64_decode_image(b64_encoded_image: str) -> Image.Image:
+    # strip the "data:image/png;base64," preamble, if present
     if "," in b64_encoded_image:
         b64_encoded_image = b64_encoded_image.split(",", 1)[1]
 
